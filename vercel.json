@@ -1,0 +1,9 @@
+{
+  "framework": "nextjs",
+  "buildCommand": "npm run build",
+  "installCommand": "npm install",
+  "nodeVersion": "22.x",
+  "env": {
+    "DATABASE_PATH": "/tmp/leadgen.db"
+  }
+}
