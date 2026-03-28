@@ -199,13 +199,7 @@ No markdown, no explanation. Pure JSON array.`;
     });
 
   } catch (e) {
-    console.error('Enrichment batch failed:', e);
-    return leads.map(l => ({
-      ...l,
-      pain_signals: 'Enrichment failed',
-      recent_activity: '',
-      score: 40,
-      score_reason: 'Enrichment error',
-    }));
+    // Re-throw so the outer enrichLeads() can apply rules-based fallback
+    throw e;
   }
 }

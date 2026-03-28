@@ -5,10 +5,11 @@ import Stripe from 'stripe';
 
 // Kick off the pipeline in a non-blocking way
 async function triggerPipeline(jobId: string) {
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+  // Always use localhost for internal self-calls to avoid routing through external tunnel
+  const internalUrl = process.env.INTERNAL_URL || 'http://localhost:3000';
   try {
     // Self-call the internal pipeline trigger endpoint
-    await fetch(`${appUrl}/api/pipeline/run`, {
+    await fetch(`${internalUrl}/api/pipeline/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-internal-key': process.env.INTERNAL_KEY || 'dev' },
       body: JSON.stringify({ jobId }),

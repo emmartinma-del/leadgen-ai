@@ -17,240 +17,298 @@ export interface RawLead {
 }
 
 export interface ICP {
-  company_size?: string;      // e.g. "11-50", "51-200", "201-500", "501-1000", "1001-5000"
-  industries?: string[];      // e.g. ["SaaS", "FinTech"]
-  job_titles?: string[];      // e.g. ["VP Sales", "Head of Marketing"]
-  geo?: string;               // e.g. "United States", "Germany"
+  company_size?: string;
+  industries?: string[];
+  job_titles?: string[];
+  geo?: string;
   lead_count?: number;
 }
 
-// Google search via SerpAPI (if key available) or direct HTML scraping
-async function googleSearch(query: string, num = 10): Promise<string[]> {
-  const serpApiKey = process.env.SERPAPI_KEY;
+function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 
-  if (serpApiKey) {
-    try {
-      const res = await axios.get('https://serpapi.com/search', {
-        params: { q: query, num, api_key: serpApiKey, engine: 'google' },
-        timeout: 10000,
-      });
-      return (res.data.organic_results || []).map((r: { link: string }) => r.link);
-    } catch {
-      // fall through to direct scrape
-    }
+// ── Source 1: GitHub API (great for tech leads: CTOs, VPs Eng, Developers) ──
+const TECH_TITLES = ['cto', 'vp engineering', 'head of engineering', 'chief technology', 'software engineer',
+  'developer', 'engineer', 'architect', 'technical lead', 'principal', 'founder', 'cofounder', 'co-founder'];
+
+function isTechTitle(titles: string[]): boolean {
+  return titles.some(t => TECH_TITLES.some(tt => t.toLowerCase().includes(tt)));
+}
+
+async function scrapeGitHub(icp: ICP, count: number): Promise<RawLead[]> {
+  const leads: RawLead[] = [];
+  const titles = icp.job_titles || [];
+  const geo = icp.geo || '';
+
+  // Build search query
+  const queries: string[] = [];
+  for (const title of titles.slice(0, 3)) {
+    let q = `"${title}" in:bio followers:>20`;
+    if (geo) q += ` location:${geo.split(' ')[0]}`;
+    queries.push(q);
+  }
+  // Also try company/bio keywords
+  if (icp.industries?.length) {
+    queries.push(`${icp.industries[0]} in:bio followers:>50`);
   }
 
-  // Fallback: scrape Google directly (best-effort, may be blocked)
+  for (const query of queries) {
+    if (leads.length >= count) break;
+    try {
+      const res = await axios.get('https://api.github.com/search/users', {
+        params: { q: query, per_page: Math.min(30, count * 2), sort: 'followers' },
+        headers: {
+          Accept: 'application/vnd.github.v3+json',
+          'User-Agent': 'LeadGenBot/1.0',
+        },
+        timeout: 10000,
+      });
+
+      const users: Array<{ login: string; url: string }> = res.data.items || [];
+
+      for (const user of users.slice(0, Math.ceil(count / queries.length) + 5)) {
+        if (leads.length >= count) break;
+        try {
+          const profile = await axios.get(`https://api.github.com/users/${user.login}`, {
+            headers: { Accept: 'application/vnd.github.v3+json', 'User-Agent': 'LeadGenBot/1.0' },
+            timeout: 8000,
+          });
+          const p = profile.data;
+          if (!p.name && !p.login) continue;
+
+          const name = p.name || p.login;
+          const parts = name.trim().split(' ');
+          const website = p.blog ? (p.blog.startsWith('http') ? p.blog : `https://${p.blog}`) : undefined;
+
+          // Infer job title from bio
+          let jobTitle = '';
+          if (p.bio) {
+            const bioLower = p.bio.toLowerCase();
+            for (const t of titles) {
+              if (bioLower.includes(t.toLowerCase())) { jobTitle = t; break; }
+            }
+            if (!jobTitle) {
+              const match = p.bio.match(/^([^|@\n,]+)/);
+              if (match) jobTitle = match[1].trim().slice(0, 60);
+            }
+          }
+
+          leads.push({
+            full_name: name,
+            first_name: parts[0],
+            last_name: parts.slice(1).join(' ') || undefined,
+            email: p.email || undefined,
+            job_title: jobTitle || titles[0],
+            company_name: p.company ? p.company.replace(/^@/, '') : undefined,
+            company_website: website,
+            location: p.location || geo || undefined,
+            source: 'github',
+          });
+          await sleep(300);
+        } catch { continue; }
+      }
+      await sleep(1000);
+    } catch (e) {
+      console.warn('[Scraper] GitHub search failed:', e instanceof Error ? e.message : String(e));
+    }
+  }
+  return leads;
+}
+
+// ── Source 2: Bing HTML scraping → company websites → team pages ──
+async function bingSearch(query: string): Promise<string[]> {
   try {
-    const res = await axios.get(`https://www.google.com/search?q=${encodeURIComponent(query)}&num=${num}`, {
+    const res = await axios.get('https://www.bing.com/search', {
+      params: { q: query, count: 20 },
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept': 'text/html',
+        'Accept-Language': 'en-US,en;q=0.9',
       },
       timeout: 10000,
     });
     const $ = cheerio.load(res.data);
-    const links: string[] = [];
-    $('a[href^="http"]').each((_, el) => {
-      const href = $(el).attr('href') || '';
-      if (href && !href.includes('google.com') && !href.includes('googleapis')) {
-        links.push(href);
-      }
+    const urls: string[] = [];
+
+    // Bing result URLs are in <cite> tags and in <a> with h2 parents
+    $('li.b_algo h2 a').each((_, el) => {
+      const href = $(el).attr('href');
+      if (href && href.startsWith('http')) urls.push(href);
     });
-    return links.slice(0, num);
+    // Also try data-bm attributes
+    $('[data-bm] a[href^="http"]').each((_, el) => {
+      const href = $(el).attr('href');
+      if (href && !href.includes('bing.com') && !href.includes('microsoft.com')) urls.push(href);
+    });
+
+    return Array.from(new Set(urls)).slice(0, 15);
   } catch {
     return [];
   }
 }
 
-// Extract LinkedIn profile data from public profile page
-async function scrapeLinkedInProfile(url: string): Promise<Partial<RawLead> | null> {
-  try {
-    const res = await axios.get(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
-        'Accept': 'text/html',
-      },
-      timeout: 8000,
-    });
-    const $ = cheerio.load(res.data);
+async function scrapeCompanyLeads(icp: ICP, count: number): Promise<RawLead[]> {
+  const leads: RawLead[] = [];
+  const titles = icp.job_titles || ['CEO', 'CTO', 'VP Sales'];
+  const industries = icp.industries || [];
+  const geo = icp.geo || '';
 
-    // LinkedIn public profiles expose structured data
-    const name = $('h1.top-card-layout__title').text().trim() ||
-                 $('h1[class*="name"]').first().text().trim() ||
-                 $('meta[property="og:title"]').attr('content')?.split(' - ')[0] || '';
+  // Search for companies in the target industry
+  const query = [
+    industries.length ? `"${industries[0]}" company` : 'SaaS company',
+    titles[0] ? `"${titles[0]}"` : '',
+    geo,
+    'team leadership',
+  ].filter(Boolean).join(' ');
 
-    const title = $('h2.top-card-layout__headline').text().trim() ||
-                  $('div.top-card-layout__entity-info h2').text().trim() || '';
+  const companyUrls = await bingSearch(query);
+  const companyRoots = companyUrls
+    .filter(u => {
+      try { return !u.includes('linkedin.com') && !u.includes('glassdoor') && !u.includes('wikipedia'); }
+      catch { return false; }
+    })
+    .map(u => { try { return new URL(u).origin; } catch { return null; } })
+    .filter((u): u is string => !!u);
 
-    const company = $('span.top-card-layout__company').text().trim() ||
-                    $('a[data-tracking-control-name="public_profile_topcard_current_company"]').text().trim() || '';
+  const uniqueRoots = Array.from(new Set(companyRoots)).slice(0, 8);
 
-    const location = $('span.top-card__subline-item').first().text().trim() || '';
+  for (const root of uniqueRoots) {
+    if (leads.length >= count) break;
+    const teamPaths = ['/team', '/about', '/about-us', '/leadership', '/people', '/our-team'];
+    for (const path of teamPaths.slice(0, 2)) {
+      try {
+        const url = root + path;
+        const res = await axios.get(url, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; LeadGenBot/1.0)' },
+          timeout: 6000,
+        });
+        const $ = cheerio.load(res.data);
+        const domain = new URL(root).hostname.replace('www.', '');
+        const industry = industries[0] || '';
 
-    if (!name) return null;
-    const parts = name.split(' ');
-    return {
-      full_name: name,
-      first_name: parts[0],
-      last_name: parts.slice(1).join(' '),
-      job_title: title,
-      company_name: company,
-      location,
-      linkedin_url: url,
-      source: 'linkedin',
-    };
-  } catch {
-    return null;
+        $('[class*="team"], [class*="member"], [class*="person"], [class*="staff"], [class*="leadership"]').each((_, el) => {
+          const name = $(el).find('h2, h3, h4, [class*="name"]').first().text().trim();
+          const title = $(el).find('p, [class*="title"], [class*="role"], [class*="position"]').first().text().trim();
+
+          if (!name || name.length < 3 || name.length > 60) return;
+          const matchesICP = titles.length === 0 || titles.some(t =>
+            title.toLowerCase().includes(t.toLowerCase().split(' ')[0])
+          );
+          if (!matchesICP && leads.length > 0) return;
+
+          const parts = name.split(' ');
+          leads.push({
+            full_name: name,
+            first_name: parts[0],
+            last_name: parts.slice(1).join(' ') || undefined,
+            job_title: title || titles[0],
+            company_name: domain,
+            company_website: root,
+            industry,
+            location: geo || undefined,
+            source: 'company_website',
+          });
+        });
+        if (leads.length > 0) break;
+        await sleep(500);
+      } catch { continue; }
+    }
+    await sleep(800);
   }
+  return leads;
 }
 
-// Scrape company website for contact/team page leads
-async function scrapeCompanyWebsite(website: string, jobTitles: string[]): Promise<RawLead[]> {
+// ── Source 3: LinkedIn public search via Bing ──
+async function scrapeLinkedInViaSearch(icp: ICP, count: number): Promise<RawLead[]> {
   const leads: RawLead[] = [];
+  const titles = icp.job_titles || ['CTO'];
+  const geo = icp.geo || '';
+  const industries = icp.industries || [];
 
-  const teamPages = ['/team', '/about', '/about-us', '/our-team', '/people', '/leadership'];
+  for (const title of titles.slice(0, 2)) {
+    if (leads.length >= count) break;
+    const query = [
+      `site:linkedin.com/in "${title}"`,
+      industries.length ? `"${industries[0]}"` : '',
+      geo,
+    ].filter(Boolean).join(' ');
 
-  for (const page of teamPages.slice(0, 3)) {
-    try {
-      const url = website.replace(/\/$/, '') + page;
-      const res = await axios.get(url, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; LeadGenBot/1.0)' },
-        timeout: 6000,
-      });
-      const $ = cheerio.load(res.data);
-      const domain = new URL(website).hostname;
+    const urls = await bingSearch(query);
+    const linkedinUrls = urls.filter(u => u.includes('linkedin.com/in/'));
 
-      // Extract person cards
-      $('[class*="team"], [class*="member"], [class*="person"], [class*="staff"]').each((_, el) => {
-        const name = $(el).find('h2, h3, h4, [class*="name"]').first().text().trim();
-        const title = $(el).find('p, [class*="title"], [class*="role"], [class*="position"]').first().text().trim();
+    for (const url of linkedinUrls.slice(0, Math.ceil(count / titles.length) + 3)) {
+      if (leads.length >= count) break;
+      try {
+        const res = await axios.get(url, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+            'Accept': 'text/html',
+          },
+          timeout: 8000,
+          maxRedirects: 3,
+        });
+        const $ = cheerio.load(res.data);
+        const metaTitle = $('meta[property="og:title"]').attr('content') || '';
+        const name = metaTitle.split(' - ')[0].trim() ||
+          $('title').text().split(' - ')[0].trim() ||
+          $('h1').first().text().trim();
+        const headline = $('meta[property="og:description"]').attr('content') || '';
 
-        if (!name || name.length < 3) return;
-
-        // Check if title matches any target job title
-        const matchesICP = jobTitles.length === 0 || jobTitles.some(t =>
-          title.toLowerCase().includes(t.toLowerCase())
-        );
-        if (!matchesICP) return;
-
+        if (!name || name.length < 2) continue;
         const parts = name.split(' ');
         leads.push({
           full_name: name,
           first_name: parts[0],
-          last_name: parts.slice(1).join(' '),
-          job_title: title,
-          company_name: domain,
-          company_website: website,
-          source: 'company_website',
+          last_name: parts.slice(1).join(' ') || undefined,
+          job_title: headline.split(' at ')[0]?.trim() || title,
+          company_name: headline.split(' at ')[1]?.trim() || undefined,
+          linkedin_url: url,
+          location: geo || undefined,
+          source: 'linkedin',
         });
-      });
-
-      if (leads.length > 0) break;
-    } catch {
-      continue;
+        await sleep(600 + Math.random() * 400);
+      } catch { continue; }
     }
+    await sleep(1000);
   }
   return leads;
 }
 
-// Find LinkedIn profiles via Google search
-async function findLinkedInProfiles(icp: ICP, count: number): Promise<RawLead[]> {
-  const leads: RawLead[] = [];
-  const titles = icp.job_titles || ['CTO', 'VP Engineering', 'Head of Product'];
-  const geo = icp.geo || '';
-  const industries = icp.industries || [];
-
-  for (const title of titles.slice(0, 3)) {
-    const query = [
-      `site:linkedin.com/in`,
-      `"${title}"`,
-      industries.length > 0 ? industries[0] : '',
-      geo ? geo : '',
-    ].filter(Boolean).join(' ');
-
-    const urls = await googleSearch(query, Math.ceil(count / titles.length) + 5);
-    const linkedinUrls = urls.filter(u => u.includes('linkedin.com/in/'));
-
-    for (const url of linkedinUrls.slice(0, Math.ceil(count / titles.length))) {
-      const profile = await scrapeLinkedInProfile(url);
-      if (profile) {
-        leads.push({ source: 'linkedin', ...profile } as RawLead);
-        // Rate limit
-        await sleep(800 + Math.random() * 500);
-      }
-    }
-  }
-  return leads;
-}
-
-// Find companies matching ICP, then scrape their team pages
-async function findCompanyLeads(icp: ICP, count: number): Promise<RawLead[]> {
-  const leads: RawLead[] = [];
-  const industries = icp.industries || [];
-  const size = icp.company_size || '';
-  const titles = icp.job_titles || ['CEO', 'CTO', 'VP Sales'];
-  const geo = icp.geo || '';
-
-  const query = [
-    industries.join(' OR '),
-    size ? `company size ${size} employees` : '',
-    geo,
-    'company',
-  ].filter(Boolean).join(' ');
-
-  const urls = await googleSearch(query, 20);
-  const companyUrls = urls.filter(u =>
-    !u.includes('linkedin.com') &&
-    !u.includes('google.com') &&
-    !u.includes('wikipedia.org') &&
-    !u.includes('glassdoor.com')
-  );
-
-  for (const url of companyUrls.slice(0, 5)) {
-    try {
-      const baseUrl = new URL(url).origin;
-      const companyLeads = await scrapeCompanyWebsite(baseUrl, titles);
-      leads.push(...companyLeads);
-      if (leads.length >= count) break;
-      await sleep(1000);
-    } catch {
-      continue;
-    }
-  }
-  return leads;
-}
-
-function sleep(ms: number) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
+// ── Main entry point ──
 export async function scrapeLeads(icp: ICP, count: number): Promise<RawLead[]> {
   const leads: RawLead[] = [];
+  const titles = icp.job_titles || [];
 
-  // Strategy 1: LinkedIn profiles via Google
-  try {
-    const linkedinLeads = await findLinkedInProfiles(icp, Math.ceil(count * 0.6));
-    leads.push(...linkedinLeads);
-  } catch (e) {
-    console.warn('LinkedIn scraping failed:', e);
+  // Strategy 1: GitHub (for tech roles)
+  if (isTechTitle(titles) || leads.length < count) {
+    try {
+      const ghLeads = await scrapeGitHub(icp, Math.ceil(count * 0.5));
+      leads.push(...ghLeads);
+      console.log(`[Scraper] GitHub: ${ghLeads.length} leads`);
+    } catch (e) { console.warn('[Scraper] GitHub failed:', e); }
   }
 
-  // Strategy 2: Company website team pages
+  // Strategy 2: LinkedIn via Bing
   if (leads.length < count) {
     try {
-      const companyLeads = await findCompanyLeads(icp, count - leads.length);
-      leads.push(...companyLeads);
-    } catch (e) {
-      console.warn('Company scraping failed:', e);
-    }
+      const liLeads = await scrapeLinkedInViaSearch(icp, Math.ceil((count - leads.length) * 0.6));
+      leads.push(...liLeads);
+      console.log(`[Scraper] LinkedIn/Bing: ${liLeads.length} leads`);
+    } catch (e) { console.warn('[Scraper] LinkedIn/Bing failed:', e); }
   }
 
-  // Deduplicate by name+company
+  // Strategy 3: Company website team pages
+  if (leads.length < count) {
+    try {
+      const cwLeads = await scrapeCompanyLeads(icp, count - leads.length);
+      leads.push(...cwLeads);
+      console.log(`[Scraper] Company websites: ${cwLeads.length} leads`);
+    } catch (e) { console.warn('[Scraper] Company websites failed:', e); }
+  }
+
+  // Deduplicate
   const seen = new Set<string>();
   const unique = leads.filter(l => {
-    const key = `${l.full_name || ''}-${l.company_name || ''}`.toLowerCase();
+    const key = `${(l.full_name || l.email || '').toLowerCase()}-${(l.company_name || '').toLowerCase()}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
