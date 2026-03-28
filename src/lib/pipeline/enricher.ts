@@ -1,8 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import type { RawLead } from './scraper';
-import type { ICP } from './scraper';
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+import type { RawLead, ICP } from './scraper';
 
 export interface EnrichedLead extends RawLead {
   pain_signals: string;
@@ -12,22 +9,94 @@ export interface EnrichedLead extends RawLead {
   email?: string;
 }
 
+// Rules-based fallback enrichment (no LLM required)
+function rulesBasedEnrich(leads: RawLead[], icp: ICP): EnrichedLead[] {
+  const targetTitles = (icp.job_titles || []).map(t => t.toLowerCase());
+  const targetIndustries = (icp.industries || []).map(i => i.toLowerCase());
+
+  const TITLE_PAIN_MAP: Record<string, string> = {
+    'cto': 'Managing technical debt, scaling infrastructure, recruiting senior engineers',
+    'vp engineering': 'Scaling the eng team, reducing time-to-deploy, managing architectural debt',
+    'vp sales': 'Pipeline coverage gaps, SDR ramp time, CRM data quality issues',
+    'head of sales': 'Inconsistent outbound results, low lead quality, manual prospecting overhead',
+    'ceo': 'Revenue predictability, burn rate control, go-to-market efficiency',
+    'founder': 'Finding first customers, building initial pipeline, product-market fit validation',
+    'head of marketing': 'MQL to SQL conversion gaps, rising CAC, attribution complexity',
+    'cmo': 'Proving marketing ROI, demand gen efficiency, brand differentiation',
+    'head of product': 'Prioritization under pressure, customer discovery gaps, feature adoption',
+    'growth': 'Top-of-funnel volume, activation rates, referral loop mechanics',
+    'revenue ops': 'CRM hygiene, forecasting accuracy, sales-marketing alignment',
+    'sdr': 'Contact data quality, personalization at scale, response rate optimization',
+    'bdr': 'Finding qualified prospects, email deliverability, booking meetings consistently',
+  };
+
+  return leads.map(lead => {
+    const title = (lead.job_title || '').toLowerCase();
+    const industry = (lead.industry || '').toLowerCase();
+
+    // Score based on ICP match
+    let score = 50;
+    const reasons: string[] = [];
+
+    if (targetTitles.some(t => title.includes(t) || t.includes(title.split(' ')[0]))) {
+      score += 25;
+      reasons.push('title matches ICP');
+    }
+    if (targetIndustries.some(i => industry.includes(i))) {
+      score += 15;
+      reasons.push('industry match');
+    }
+    if (lead.linkedin_url) { score += 5; reasons.push('LinkedIn verified'); }
+    if (lead.email) { score += 5; reasons.push('email available'); }
+
+    const painKey = Object.keys(TITLE_PAIN_MAP).find(k => title.includes(k));
+    const pain_signals = painKey
+      ? TITLE_PAIN_MAP[painKey]
+      : `Operational efficiency, team scaling, and competitive pressure typical for ${title || 'this role'}`;
+
+    return {
+      ...lead,
+      pain_signals,
+      recent_activity: 'No LLM enrichment — rules-based scoring applied',
+      score: Math.min(99, score),
+      score_reason: reasons.length > 0 ? reasons.join(', ') : 'Baseline ICP proximity score',
+    };
+  });
+}
+
 // Batch enrich leads using Claude
 export async function enrichLeads(leads: RawLead[], icp: ICP): Promise<EnrichedLead[]> {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    console.log('[Enricher] No Anthropic key — using rules-based enrichment');
+    return rulesBasedEnrich(leads, icp);
+  }
+
   const enriched: EnrichedLead[] = [];
 
   // Process in batches of 5 to avoid rate limits
   const batchSize = 5;
   for (let i = 0; i < leads.length; i += batchSize) {
     const batch = leads.slice(i, i + batchSize);
-    const batchResults = await enrichBatch(batch, icp);
-    enriched.push(...batchResults);
+    try {
+      const batchResults = await enrichBatch(batch, icp);
+      enriched.push(...batchResults);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      // Fall back to rules-based for this batch on rate limit or error
+      if (msg.includes('rate') || msg.includes('limit') || msg.includes('quota') || msg.includes('usage')) {
+        console.warn('[Enricher] Anthropic rate limit hit — falling back to rules-based for this batch');
+        enriched.push(...rulesBasedEnrich(batch, icp));
+      } else {
+        throw e;
+      }
+    }
   }
 
   return enriched;
 }
 
 async function enrichBatch(leads: RawLead[], icp: ICP): Promise<EnrichedLead[]> {
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const leadsJson = JSON.stringify(leads.map((l, idx) => ({
     idx,
     name: l.full_name,
