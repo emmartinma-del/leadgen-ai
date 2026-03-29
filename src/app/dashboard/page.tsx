@@ -64,14 +64,37 @@ function DashboardContent() {
     }
   }, []);
 
+  // If redirected from Stripe with a job ID, auto-load that job
+  useEffect(() => {
+    if (!jobParam) return;
+    fetch(`/api/jobs/${jobParam}`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.job) {
+          setJobs([data.job]);
+          setFetched(true);
+        }
+      })
+      .catch(() => {});
+  }, [jobParam]);
+
   // Auto-poll running jobs
   useEffect(() => {
-    if (!fetched || !email) return;
+    if (!fetched) return;
     const hasRunning = jobs.some(j => j.status === 'running' || j.status === 'paid');
     if (!hasRunning) return;
-    const interval = setInterval(() => fetchJobs(email), 8000);
+    const poll = () => {
+      if (email) {
+        fetchJobs(email);
+      } else if (jobParam) {
+        fetch(`/api/jobs/${jobParam}`).then(r => r.json()).then(data => {
+          if (data.job) setJobs([data.job]);
+        }).catch(() => {});
+      }
+    };
+    const interval = setInterval(poll, 8000);
     return () => clearInterval(interval);
-  }, [jobs, fetched, email, fetchJobs]);
+  }, [jobs, fetched, email, jobParam, fetchJobs]);
 
   const handleLookup = (e: React.FormEvent) => {
     e.preventDefault();
