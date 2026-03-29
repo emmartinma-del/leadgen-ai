@@ -116,6 +116,7 @@ async function scrapeGitHub(icp: ICP, count: number): Promise<RawLead[]> {
 
 // ── Source 2: DuckDuckGo HTML scraping → company websites → team pages ──
 async function webSearch(query: string): Promise<string[]> {
+  await sleep(1500 + Math.random() * 1000); // Rate-limit safety: space out requests
   try {
     // Use DuckDuckGo HTML interface — returns real URLs without redirect wrappers
     const res = await axios.get('https://html.duckduckgo.com/html/', {
@@ -227,10 +228,12 @@ async function scrapeLinkedInViaSearch(icp: ICP, count: number): Promise<RawLead
 
   for (const title of titles.slice(0, 2)) {
     if (leads.length >= count) break;
+    // Use a general query (not site: prefix) — DDG/search engines block site:linkedin.com queries
     const query = [
-      `site:linkedin.com/in "${title}"`,
+      `linkedin.com/in "${title}"`,
       industries.length ? `"${industries[0]}"` : '',
       geo,
+      'profile',
     ].filter(Boolean).join(' ');
 
     const urls = await webSearch(query);
