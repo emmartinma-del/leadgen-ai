@@ -114,6 +114,42 @@ export default function Home() {
           </div>
         </div>
 
+        <div className="card" style={{ marginBottom: 28 }}>
+          <h2 style={{ marginBottom: 4 }}>Sample Output</h2>
+          <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 20 }}>This is what your enriched leads look like. Every lead includes contact info, pain signals, and an AI quality score.</p>
+          {[
+            {
+              name: 'Sarah Chen', title: 'VP of Sales', company: 'Nexlayer (Series A, 45 employees)',
+              email: 's.chen@nexlayer.io', score: 91,
+              pain: 'Team tripled in 6 months; manually building prospect lists in Sheets. No dedicated SDR tooling. Recent LinkedIn post asking for outbound stack recs.',
+            },
+            {
+              name: 'Marcus Webb', title: 'Head of Revenue Ops', company: 'Stackform (SaaS, 120 employees)',
+              email: 'm.webb@stackform.com', score: 84,
+              pain: 'Migrating from HubSpot to Salesforce — gap in lead enrichment during transition. Hiring 3 BDRs this quarter per job board.',
+            },
+            {
+              name: 'Priya Nair', title: 'Founder / CEO', company: 'Claritix (Pre-seed, 8 employees)',
+              email: 'priya@claritix.co', score: 78,
+              pain: 'Doing all outbound herself. No sales hire yet. Public GitHub shows active product; no CRM in tech stack. Open to tools that save time.',
+            },
+          ].map((lead, i) => (
+            <div key={i} style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, padding: '14px 16px', marginBottom: i < 2 ? 10 : 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
+                <div>
+                  <span style={{ fontWeight: 700 }}>{lead.name}</span>
+                  <span style={{ color: 'var(--muted)', fontSize: 13 }}> · {lead.title} · {lead.company}</span>
+                </div>
+                <span style={{ background: lead.score >= 90 ? '#1a3a2a' : lead.score >= 80 ? '#1a2a3a' : '#2a2a1a', color: lead.score >= 90 ? 'var(--success)' : lead.score >= 80 ? '#60a5fa' : 'var(--warning)', borderRadius: 6, padding: '2px 10px', fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>
+                  {lead.score} / 100
+                </span>
+              </div>
+              <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 6 }}>{lead.email}</div>
+              <div style={{ fontSize: 13 }}><span style={{ color: 'var(--muted)' }}>Pain signals: </span>{lead.pain}</div>
+            </div>
+          ))}
+        </div>
+
         <div className="card">
           <h2>Generate Leads</h2>
           {error && <div className="alert alert-error">{error}</div>}
