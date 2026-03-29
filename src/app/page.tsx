@@ -87,6 +87,10 @@ export default function Home() {
           </Link>
         </nav>
 
+        <div style={{ background: 'linear-gradient(135deg, #6c63ff22, #22c55e22)', border: '1px solid #6c63ff44', borderRadius: 8, padding: '10px 20px', textAlign: 'center', marginBottom: 24, fontSize: 14 }}>
+          <strong style={{ color: '#22c55e' }}>Pilot Offer:</strong> First 3 customers get <strong>$30 credit</strong> (25 leads free). <span style={{ color: 'var(--muted)' }}>2 spots left.</span>
+        </div>
+
         <div className="hero">
           <h1>B2B Leads from Your<br />ICP Definition</h1>
           <p>Describe your ideal customer. We scrape, enrich with AI, and score leads. Pay only per lead — no subscription required.</p>
