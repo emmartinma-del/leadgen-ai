@@ -114,14 +114,15 @@ async function scrapeGitHub(icp: ICP, count: number): Promise<RawLead[]> {
   return leads;
 }
 
-// ── Source 2: Bing HTML scraping → company websites → team pages ──
-async function bingSearch(query: string): Promise<string[]> {
+// ── Source 2: DuckDuckGo HTML scraping → company websites → team pages ──
+async function webSearch(query: string): Promise<string[]> {
   try {
-    const res = await axios.get('https://www.bing.com/search', {
-      params: { q: query, count: 20 },
+    // Use DuckDuckGo HTML interface — returns real URLs without redirect wrappers
+    const res = await axios.get('https://html.duckduckgo.com/html/', {
+      params: { q: query },
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html',
+        'Accept': 'text/html,application/xhtml+xml',
         'Accept-Language': 'en-US,en;q=0.9',
       },
       timeout: 10000,
@@ -129,15 +130,15 @@ async function bingSearch(query: string): Promise<string[]> {
     const $ = cheerio.load(res.data);
     const urls: string[] = [];
 
-    // Bing result URLs are in <cite> tags and in <a> with h2 parents
-    $('li.b_algo h2 a').each((_, el) => {
-      const href = $(el).attr('href');
-      if (href && href.startsWith('http')) urls.push(href);
-    });
-    // Also try data-bm attributes
-    $('[data-bm] a[href^="http"]').each((_, el) => {
-      const href = $(el).attr('href');
-      if (href && !href.includes('bing.com') && !href.includes('microsoft.com')) urls.push(href);
+    $('a.result__url, a.result__a').each((_, el) => {
+      const href = $(el).attr('href') || '';
+      // DDG wraps URLs in redirect: extract actual URL from uddg param
+      const match = href.match(/uddg=([^&]+)/);
+      if (match) {
+        try { urls.push(decodeURIComponent(match[1])); } catch { /* skip */ }
+      } else if (href.startsWith('http') && !href.includes('duckduckgo.com')) {
+        urls.push(href);
+      }
     });
 
     return Array.from(new Set(urls)).slice(0, 15);
@@ -160,7 +161,7 @@ async function scrapeCompanyLeads(icp: ICP, count: number): Promise<RawLead[]> {
     'team leadership',
   ].filter(Boolean).join(' ');
 
-  const companyUrls = await bingSearch(query);
+  const companyUrls = await webSearch(query);
   const companyRoots = companyUrls
     .filter(u => {
       try { return !u.includes('linkedin.com') && !u.includes('glassdoor') && !u.includes('wikipedia'); }
@@ -232,7 +233,7 @@ async function scrapeLinkedInViaSearch(icp: ICP, count: number): Promise<RawLead
       geo,
     ].filter(Boolean).join(' ');
 
-    const urls = await bingSearch(query);
+    const urls = await webSearch(query);
     const linkedinUrls = urls.filter(u => u.includes('linkedin.com/in/'));
 
     for (const url of linkedinUrls.slice(0, Math.ceil(count / titles.length) + 3)) {
