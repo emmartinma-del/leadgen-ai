@@ -120,3 +120,32 @@ Quick question: were the pain signals useful for your outreach? If yes, I'd love
 If you found them useful, I'd love to keep working with you. Let me know if you'd like a larger batch or a different ICP.
 
 — [Your name]
+
+---
+
+## RevGenius Slack (NEW — HIGH VALUE)
+
+RevGenius has 50k+ sales leaders, SDRs, and RevOps professionals. This is the highest-signal community for our ICP.
+
+**How to join:** https://www.revgenius.com/
+
+**Message to post in #tools or #prospecting channel:**
+
+```
+Hey everyone — I just launched a pay-per-lead B2B lead enrichment tool and I'm looking for 3 pilot customers to try it free.
+
+You define your ICP (job titles, industry, company size, geo) → we scrape + AI-enrich leads with pain signals and quality scores → you get a CSV.
+
+$1/lead, $5 base. No subscription. First 3 pilots get a free first run (25 leads, $30 value).
+
+Would love feedback on lead quality. Happy to DM anyone who wants to try.
+
+Link: https://flooring-ian-footwear-borders.trycloudflare.com
+```
+
+---
+
+## Product Hunt (for broader reach after pilots confirmed)
+
+Submit after getting first 2-3 testimonials. Much higher ROI with social proof.
+
